@@ -249,12 +249,12 @@ int main(int argc, char* argv[])
 #define BROKER_VERSION "1.3.0.2" /* __VERSION__ */
 #define PRODUCT_NAME "Really Small Message Broker"
 
-	static char* broker_version_eye = NULL;
-	static char* broker_timestamp_eye = NULL;
+	//static char* broker_version_eye = NULL;
+	//static char* broker_timestamp_eye = NULL;
 
 	FUNC_ENTRY_NOLOG;
-	broker_timestamp_eye = "RSMB_Timestamp " BUILD_TIMESTAMP;
-	broker_version_eye = "RSMB_Version " BROKER_VERSION;
+	//broker_timestamp_eye = "RSMB_Timestamp " BUILD_TIMESTAMP;
+	//broker_version_eye = "RSMB_Version " BROKER_VERSION;
 	BrokerState.version = BROKER_VERSION;
 	BrokerState.timestamp = BUILD_TIMESTAMP;
 
@@ -515,7 +515,7 @@ char* Broker_recordFFDC(char* symptoms)
 		fprintf(file, "Version      :- %s\n", BrokerState.version);
 		fprintf(file, "Build        :- %s\n", BrokerState.timestamp);
 		fprintf(file, "Features     :- %s\n", features);
-		fprintf(file, "Pointer size :- %ld bytes\n", sizeof(void*));
+		fprintf(file, "Pointer size :- %d bytes\n", sizeof(void*));
 		fprintf(file, "Date/Time    :- %s\n", asctime(timeinfo));
 		fprintf(file, "Reason       :- %s\n\n", symptoms);
 		/* potential additions:

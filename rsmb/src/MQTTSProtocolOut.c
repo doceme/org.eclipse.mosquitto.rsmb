@@ -41,8 +41,7 @@ void Bridge_subscribe(BridgeConnections* bc, Clients* client);
 
 Clients* MQTTSProtocol_create_multicast(char* ip_address, char* clientID, int loopback)
 { /* outgoing connection */
-	int i, port, rc;
-	char* addr;
+	int i, port;
 	Clients* newc = NULL;
 	char* intface = NULL;
 	int ipv6 = 0;
@@ -69,14 +68,14 @@ Clients* MQTTSProtocol_create_multicast(char* ip_address, char* clientID, int lo
 		++intface;
 	}
 
-	addr = MQTTProtocol_addressPort(ip_address, &port);
+	MQTTProtocol_addressPort(ip_address, &port);
 
 	newc->addr = malloc(strlen(ip_address) + 1);
 	strcpy(newc->addr, ip_address);
 
 	ipv6 = (newc->addr[0] == '[');
 
-	rc = Socket_new_udp(&(newc->socket), ipv6);
+	Socket_new_udp(&(newc->socket), ipv6);
 
 	if (setsockopt(newc->socket, IPPROTO_IP, IP_MULTICAST_LOOP, (const char*)&loopback, sizeof(loopback)) == SOCKET_ERROR)
 		Socket_error("set bridge IP_MULTICAST_LOOP", newc->socket);
@@ -96,7 +95,7 @@ Clients* MQTTSProtocol_create_multicast(char* ip_address, char* clientID, int lo
 		{
 			struct in_addr interface_addr;
 #if defined(WIN32)
-			if ((rc = win_inet_pton(AF_INET, intface, &interface_addr)) == SOCKET_ERROR)
+			if ((win_inet_pton(AF_INET, intface, &interface_addr)) == SOCKET_ERROR)
 				Socket_error("WSAStringToAddress interface", newc->socket);
 			else
 			{

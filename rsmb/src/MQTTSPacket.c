@@ -402,7 +402,6 @@ void* MQTTSPacket_publish(MQTTSHeader header, char* data)
 {
 	MQTTS_Publish* pack = NULL;
 	char* curdata = data;
-	char* enddata = &data[header.len - 2];
 	int topicLen = 0;
 	int datalen = 0;
 

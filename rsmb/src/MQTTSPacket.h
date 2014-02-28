@@ -40,7 +40,7 @@ enum MQTTS_msgTypes
 	MQTTS_PUBLISH, MQTTS_PUBACK, MQTTS_PUBCOMP, MQTTS_PUBREC, MQTTS_PUBREL, MQTTS_RESERVED2,
 	MQTTS_SUBSCRIBE, MQTTS_SUBACK, MQTTS_UNSUBSCRIBE, MQTTS_UNSUBACK, MQTTS_PINGREQ, MQTTS_PINGRESP,
 	MQTTS_DISCONNECT, MQTTS_RESERVED3, MQTTS_WILLTOPICUPD, MQTTS_WILLTOPICRESP, MQTTS_WILLMSGUPD,
-	MQTTS_WILLMSGRESP
+	MQTTS_WILLMSGRESP, MQTTS_ENCAPSULATED=0xFE
 };
 
 
@@ -241,7 +241,11 @@ typedef MQTTS_Header MQTTS_WillMsgResp;
 int MQTTSPacket_initialize(BrokerStates* aBrokerState);
 void MQTTSPacket_terminate();
 char* MQTTSPacket_name(int ptype);
+#if !defined(MQTTS_FORWARDER)
 void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error);
+#else
+void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error, Encapsulation *encap);
+#endif
 
 void* MQTTSPacket_header_only(MQTTSHeader header, char* data);
 void* MQTTSPacket_header_with_msgId(MQTTSHeader header, char* data);
@@ -279,7 +283,8 @@ void MQTTSPacket_free_willMsgUpd(void* pack);
 
 
 
-int MQTTSPacket_send(int socket, char* addr, MQTTSHeader header, char* buffer, int buflen);
+int MQTTSPacket_send(Clients *client, MQTTSHeader header, char* buffer, int buflen);
+int MQTTSPacket_send_socket(int socket, char* addr, char* buffer, int buflen);
 int MQTTSPacket_send_publish(Clients* client, MQTTS_Publish* pub);
 int MQTTSPacket_send_connack(Clients* client, int returnCode);
 int MQTTSPacket_send_willTopicReq(Clients* client);

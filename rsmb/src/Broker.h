@@ -66,6 +66,14 @@ enum broker_run_state { BROKER_STOPPED, BROKER_RUNNING, BROKER_STOPPING };
 
 defTree(CLIENTS)
 
+$ifdef MQTTS_FORWARDER
+def ENCAP
+{
+   n32 ptr DATA open "id"
+   n32 dec "len"
+}
+$endif
+
 def BROKERSTATES
 {
    n32 ptr STRING open "version"
@@ -121,7 +129,10 @@ $else
 $endif
 $endif
 $ifdef MQTTS
-	n32 dec "max_mqtts_packet_size"
+   n32 dec "max_mqtts_packet_size"
+$ifdef MQTTS_FORWARDER
+   ENCAP "wireless"
+$endif
 $endif
 }
 BE*/
@@ -177,6 +188,9 @@ typedef struct
 #if defined(MQTTS)
 	int max_mqtts_packet_size;  /**< max size of MQTT-S packets we can receive.  We have to allocate a memory
 	                               buffer of this size, so we may want to reduce it.  The current max is 65535.  */
+#if defined(MQTTS_FORWARDER)
+	Encapsulation wireless;     /**< context for the most recent wireless node passed by forwarder */
+#endif
 #endif
 } BrokerStates;	/**< Global broker state */
 

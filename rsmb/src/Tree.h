@@ -60,6 +60,12 @@ defTree(TMP)
 
 BE*/
 
+#if !defined(MQTTS_FORWARDER)
+#define TREE_NUM_INDEXES 2
+#else
+#define TREE_NUM_INDEXES 3
+#endif
+
 /**
  * Structure to hold all data for one list element
  */
@@ -82,7 +88,7 @@ typedef struct
 	{
 		Node *root;	/**< root node pointer */
 		int (*compare)(void*, void*, int); /**< comparison function */
-	} index[2];
+	} index[TREE_NUM_INDEXES];
 	int indexes, /**< no of indexes into tree */
 		count,  /**< no of items */
 		size;  /**< heap storage used */

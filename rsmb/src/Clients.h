@@ -63,6 +63,14 @@ typedef struct
 	int refcount;
 } Publications;
 
+#if defined(MQTTS_FORWARDER)
+typedef struct
+{
+	char *id;
+	int len;
+} Encapsulation;
+#endif
+
 /*BE
 // This should get moved to MQTTProtocol, but the includes don't quite work yet
 map MESSAGE_TYPES
@@ -237,10 +245,21 @@ $ifdef MQTTS
 $ifndef NO_BRIDGE
 	n32 ptr PENDINGSUBSCRIPTION suppress "pendingSubscription"
 $endif
+$ifdef MQTTS_FORWARDER
+	ENCAP suppress "wireless"
+$endif
 $endif
 }
 
 defList(CLIENTS)
+
+$ifdef MQTTS_FORWARDER
+def ENCAP
+{
+	n32 ptr DATA open "id"
+	n32 dec "len"
+}
+$endif
 
 BE*/
 /**
@@ -279,6 +298,9 @@ typedef struct
 #if !defined(NO_BRIDGE)
 	PendingSubscription* pendingSubscription;
 #endif
+#if defined(MQTTS_FORWARDER)
+	Encapsulation wireless;
+#endif
 #endif
 } Clients;
 #if !defined(__APPLE__)
@@ -290,6 +312,9 @@ int queuedMsgsCount(Clients*);
 
 #if defined(MQTTS)
 int clientAddrCompare(void*a, void* b, int);
+#if defined(MQTTS_FORWARDER)
+int clientWirelessIdCompare(void* a, void* b, int value);
+#endif
 #endif
 
 #endif

@@ -194,12 +194,33 @@ void MQTTSProtocol_timeslice(int sock)
 	MQTTS_Header* pack = NULL;
 	char* clientAddr = NULL;
 	Clients* client = NULL;
+#if defined(MQTTS_FORWARDER)
+	Encapsulation encap;
+#endif
 
 	FUNC_ENTRY;
+#if !defined(MQTTS_FORWARDER)
 	pack = MQTTSPacket_Factory(sock, &clientAddr, &error);
+#else
+	encap.id = NULL;
+	pack = MQTTSPacket_Factory(sock, &clientAddr, &error, &encap);
+#endif
 
-	if (clientAddr)
-		client = Protocol_getclientbyaddr(clientAddr);
+#if defined(MQTTS_FORWARDER)
+	if (encap.id)
+	{
+		Node *elem = TreeFindIndex(bstate->mqtts_clients, &encap, 2);
+		if (elem)
+			client = (Clients*)(elem->content);
+
+		bstate->wireless = encap;
+	}
+	else
+#endif
+	{
+		if (clientAddr)
+			client = Protocol_getclientbyaddr(clientAddr);
+	}
 
 #if !defined(NO_BRIDGE)
 	if (client == NULL)
@@ -252,6 +273,16 @@ void MQTTSProtocol_timeslice(int sock)
 		 *  - centralise calls to time( &(c->lastContact) ); (currently in each _handle* function
 		 */
 	}
+
+#if defined(MQTTS_FORWARDER)
+	/* Clear wireless node ID from broker state */
+	if (bstate->wireless.id)
+	{
+		free(bstate->wireless.id);
+		bstate->wireless.id = NULL;
+		bstate->wireless.len = 0;
+	}
+#endif
 	FUNC_EXIT;
 }
 
@@ -384,6 +415,14 @@ int MQTTSProtocol_handleConnects(void* pack, int sock, char* clientAddr, Clients
 			free(client->addr);
 			client->connect_state = 0;
 			client->connected = 0; /* Do not connect until we know the connack has been sent */
+#if defined(MQTTS_FORWARDER)
+			if (client->wireless.id)
+			{
+				free(client->wireless.id);
+				client->wireless.id = NULL;
+				client->wireless.len = 0;
+			}
+#endif
 		}
 		client->clientID = connect->clientID;
 		client->keepAliveInterval = connect->keepAlive;
@@ -392,6 +431,17 @@ int MQTTSProtocol_handleConnects(void* pack, int sock, char* clientAddr, Clients
 		client->addr = malloc(strlen(clientAddr)+1);
 		strcpy(client->addr, clientAddr);
 		TreeAdd(bstate->mqtts_clients, client, sizeof(Clients) + strlen(client->clientID)+1 + 3*sizeof(List));
+#if defined(MQTTS_FORWARDER)
+		if (bstate->wireless.id)
+		{
+			client->wireless.id = bstate->wireless.id;
+			client->wireless.len = bstate->wireless.len;
+
+			/* client reuses the wireless id from the bridge state */
+			bstate->wireless.id = NULL;
+			bstate->wireless.len = 0;
+		}
+#endif
 
 		connect->clientID = NULL; /* don't want to free this space as it is being used in the clients list above */
 

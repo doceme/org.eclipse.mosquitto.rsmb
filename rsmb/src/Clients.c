@@ -81,4 +81,20 @@ int clientAddrCompare(void* a, void* b, int value)
 
 	return strcmp(as, bs);
 }
+
+#if defined(MQTTS_FORWARDER)
+int clientWirelessIdCompare(void* a, void* b, int value)
+{
+	int result = 0;
+	Encapsulation *as = &((Clients*)a)->wireless;
+	Encapsulation *bs = (value) ? &((Clients*)b)->wireless : (Encapsulation*)b;
+
+	if (as->len != bs->len)
+		result = (as->len > bs->len) ? -1 : 1;
+	else
+		result = memcmp(as->id, bs->id, as->len);
+
+	return result;
+}
+#endif
 #endif

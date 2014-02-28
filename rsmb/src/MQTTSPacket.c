@@ -139,7 +139,11 @@ void MQTTSPacket_terminate()
 }
 
 
+#if !defined(MQTTS_FORWARDER)
 void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error)
+#else
+void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error, Encapsulation *encap)
+#endif
 {
 	static MQTTSHeader header;
 	int ptype;
@@ -149,6 +153,7 @@ void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error)
 	int n;
 	char* data = &msg[0];
 	socklen_t len = sizeof(cliAddr);
+	int encapLen = 0;
 
 	FUNC_ENTRY;
 /* #if !defined(NO_BRIDGE)
@@ -198,18 +203,67 @@ void* MQTTSPacket_Factory(int sock, char** clientAddr, int* error)
 		header.len = *(unsigned char*)data++;
 	header.type = *data++;
 	//printf("header.type is %d, header.len is %d, n is %d\n", header.type, header.len, n);
-    if (header.len != n)
-    {
-		*error = UDPSOCKET_INCOMPLETE;
-		goto exit;
-    }
-	else
+	ptype = header.type;
+
+#if defined(MQTTS_FORWARDER)
+	if (ptype == MQTTS_ENCAPSULATED)
 	{
-		ptype = header.type;
+		if (!encap)
+		{
+			Log(LOG_WARNING, 0, "Received unsupported encapsulated packet");
+			*error = 0;
+			goto exit;
+		}
+
+		if (header.len >= 4)
+		{
+			encapLen = header.len;
+			if (encap->id)
+			{
+				Log(LOG_WARNING, 0, "Wireless node id not freed");
+				free(encap->id);
+			}
+
+			// Ignore the control octet
+			data++;
+
+			// Copy the wireless node ID
+			encap->len = header.len - 3;
+			encap->id = malloc(encap->len);
+			memcpy(encap->id, data, encap->len);
+			data += encap->len;
+
+			// Parse the inner message length
+			if (*data == 1)
+			{
+				++data;
+				header.len = readInt(&data);
+			}
+			else
+				header.len = *(unsigned char*)data++;
+
+			// Parse the inner message type
+			header.type = *data++;
+			ptype = header.type;
+		}
+		else
+		{
+			Log(LOG_ERROR, 0, "Invalid encapsulated packet length");
+			*error = BAD_MQTTS_PACKET;
+			goto exit;
+		}
+	}
+#endif
+	if (encapLen + header.len == n)
+	{
 		if (ptype < MQTTS_ADVERTISE || ptype > MQTTS_WILLMSGRESP || new_mqtts_packets[ptype] == NULL)
 			Log(TRACE_MAX, 17, NULL, ptype);
 		else if ((pack = (*new_mqtts_packets[ptype])(header, data)) == NULL)
 			*error = BAD_MQTTS_PACKET;
+	}
+	else
+	{
+		*error = UDPSOCKET_INCOMPLETE;
 	}
 exit:
    	FUNC_EXIT_RC(*error);
@@ -691,35 +745,77 @@ void MQTTSPacket_free_willMsgUpd(void* pack)
 }
 
 
-int MQTTSPacket_send(int socket, char* addr, MQTTSHeader header, char* buffer, int buflen)
+int MQTTSPacket_send(Clients *client, MQTTSHeader header, char* buffer, int buflen)
 {
-	struct sockaddr_in cliaddr;
 	int rc = 0;
-	char *p;
-	char *tmpAddr = NULL;
+	int encapLen = 0;
 	char *data = NULL;
 	char *ptr = NULL;
 
 	FUNC_ENTRY;
 
+#if defined(MQTTS_FORWARDER)
+	if (client->wireless.id)
+		encapLen = 3 + client->wireless.len;
+#endif
+
 	if (header.len > 256)
 	{
 		header.len += 2;
 		buflen += 2;
-		data = malloc(header.len);
-		ptr = data;
+		data = malloc(header.len + encapLen);
+		ptr = data + encapLen;
 		*ptr++ = 0x01;
 		writeInt(&ptr, header.len);
 	}
 	else
 	{
-		data = malloc(header.len);
-		ptr = data;
+		data = malloc(header.len + encapLen);
+		ptr = data + encapLen;
 		*ptr++ = header.len;
 	}
 	*ptr++ = header.type;
 
 	memcpy(ptr, buffer, buflen);
+
+	/* Send the entire message to the socket */
+	buffer = data;
+	buflen = header.len;
+
+#if defined(MQTTS_FORWARDER)
+	/* Add encapsulated header if sending to a forwarder */
+	if (client->wireless.id)
+	{
+		buflen += encapLen;
+		ptr = data;
+		*ptr++ = encapLen;
+		*ptr++ = MQTTS_ENCAPSULATED;
+		*ptr++ = 0x01; /* default to one hop radius */
+		memcpy(ptr, client->wireless.id, client->wireless.len);
+	}
+#endif
+
+	rc = MQTTSPacket_send_socket(client->socket, client->addr, buffer, buflen);
+
+#if defined(MQTTS_FORWARDER)
+	/* Free the encapsulated packet if we sent it to a forwarder */
+	if (client->wireless.id)
+		free(data);
+#endif
+
+	FUNC_EXIT_RC(rc);
+	return rc;
+}
+
+
+int MQTTSPacket_send_socket(int socket, char* addr, char* buffer, int buflen)
+{
+	struct sockaddr_in cliaddr;
+	int rc = 0;
+	char *p;
+	char *tmpAddr = NULL;
+
+	FUNC_ENTRY;
 
 	/* This address processing needs to be changed to be less expensive */
 	tmpAddr = malloc(strlen(addr) + 1);
@@ -731,74 +827,19 @@ int MQTTSPacket_send(int socket, char* addr, MQTTSHeader header, char* buffer, i
 	cliaddr.sin_port = htons(atoi(strtok(NULL, ":")));
 	free(tmpAddr);
 
-/* #if !defined(NO_BRIDGE)
-	client = Protocol_getoutboundclient(socket);
-	FUNC_ENTRY;
-	if (client != NULL)
-	{
-		rc = send(socket,data,buflen+2,0);
-		printf("send returned %d\n",rc);
-	}
-	else
-# endif */
-		rc = sendto(socket, data, buflen + 2, 0, (const struct sockaddr*)&cliaddr, sizeof(cliaddr));
-
-		/*struct iovec vec;
-		vec.iov_base = data;
-		vec.iov_len = buflen + 2;
-		struct msghdr msg;
-		msg.msg_name = &cliaddr;
-		msg.msg_namelen = sizeof(cliaddr);
-		msg.msg_iov = &vec;
-		msg.msg_iovlen = 1;
-		msg.msg_control = NULL;
-		msg.msg_controllen = 0;
-		rc = sendmsg(socket, &msg, 0);*/
+	rc = sendto(socket, buffer, buflen, 0, (const struct sockaddr*)&cliaddr, sizeof(cliaddr));
 
 	if (rc == SOCKET_ERROR)
-	{
 		Socket_error("sendto", socket);
-/*		if (err == EWOULDBLOCK || err == EAGAIN)
-			rc = TCPSOCKET_INTERRUPTED;
-*/
-
-	}
 	else
-	{
 		rc = 0;
-	}
-
-
-	/*
-	printf("Send to %s on socket %d\n",addr,socket);
-	printf("%u:",header.len);
-	printf("%u",header.type);
-	if (buffer != NULL)
-	{
-		for (i=0;i<buflen;i++)
-		{
-			printf(":%u",buffer[i]);
-		}
-	}
-	printf("\n");
-	*/
-
-	free(data);
-    /*
-	buf = malloc(10);
-	buf[0] = header.byte;
-	rc = 1 + MQTTPacket_encode(&buf[1], buflen);
-	rc = Socket_putdatas(socket, buf, rc, 1, &buffer, &buflen);
-	if (rc != TCPSOCKET_INTERRUPTED)
-	  free(buf);
-    */
 
 	FUNC_EXIT_RC(rc);
 	return rc;
 }
 
 
-int MQTTSPacket_sendPacketBuffer(int socket, char* addr, PacketBuffer buf)
+int MQTTSPacket_sendPacketBufferSocket(int socket, char* addr, PacketBuffer buf)
 {
 	struct sockaddr_in cliaddr;
 	char *tmpAddr = NULL, *p;
@@ -826,6 +867,44 @@ int MQTTSPacket_sendPacketBuffer(int socket, char* addr, PacketBuffer buf)
 }
 
 
+int MQTTSPacket_sendPacketBuffer(Clients *client, PacketBuffer buf)
+{
+	int rc = 0;
+
+	FUNC_ENTRY;
+
+#if defined(MQTTS_FORWARDER)
+	/* Add encapsulated header if sending to a forwarder */
+	if (client->wireless.id)
+	{
+		PacketBuffer origBuf = buf;
+		int headerLen = 3 + client->wireless.len;
+		buf.len += headerLen;
+		buf.data = malloc(buf.len);
+		buf.ptr = buf.data;
+		*(buf.ptr)++ = headerLen;
+		*(buf.ptr)++ = MQTTS_ENCAPSULATED;
+		*(buf.ptr)++ = 1; /* default to one hop radius */
+		memcpy(buf.ptr, client->wireless.id, client->wireless.len);
+		buf.ptr += client->wireless.len;
+		memcpy(buf.ptr, origBuf.data, origBuf.len);
+		buf.ptr += origBuf.len;
+	}
+#endif
+
+	rc = MQTTSPacket_sendPacketBufferSocket(client->socket, client->addr, buf);
+
+#if defined(MQTTS_FORWARDER)
+	/* Free the encapsulated packet if we sent it to a forwarder */
+	if (client->wireless.id)
+		free(buf.data);
+#endif
+
+	FUNC_EXIT_RC(rc);
+	return rc;
+}
+
+
 int MQTTSPacket_send_ack(Clients* client, char type)
 {
 	PacketBuffer buf;
@@ -833,7 +912,7 @@ int MQTTSPacket_send_ack(Clients* client, char type)
 
 	FUNC_ENTRY;
 	buf = MQTTSPacketSerialize_ack(type, -1);
-	rc = MQTTSPacket_sendPacketBuffer(client->socket, client->addr, buf);
+	rc = MQTTSPacket_sendPacketBuffer(client, buf);
 	free(buf.data);
 	FUNC_EXIT_RC(rc);
 	return rc;
@@ -847,7 +926,7 @@ int MQTTSPacket_send_ack_with_msgId(Clients* client, char type, int msgId)
 
 	FUNC_ENTRY;
 	buf = MQTTSPacketSerialize_ack(type, msgId);
-	rc = MQTTSPacket_sendPacketBuffer(client->socket, client->addr, buf);
+	rc = MQTTSPacket_sendPacketBuffer(client, buf);
 	free(buf.data);
 	FUNC_EXIT_RC(rc);
 	return rc;
@@ -861,7 +940,7 @@ int MQTTSPacket_send_connack(Clients* client, int returnCode)
 
 	FUNC_ENTRY;
 	buf = MQTTSSerialize_connack(returnCode);
-	rc = MQTTSPacket_sendPacketBuffer(client->socket, client->addr, buf);
+	rc = MQTTSPacket_sendPacketBuffer(client, buf);
 	free(buf.data);
 	Log(LOG_PROTOCOL, 40, NULL, socket, client->addr, client->clientID, returnCode, rc);	
 	FUNC_EXIT;
@@ -927,7 +1006,7 @@ int MQTTSPacket_send_regAck(Clients* client, int msgId, int topicId, char return
 	writeInt(&ptr, msgId);
 	writeChar(&ptr, returnCode);
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, datalen);
+	rc = MQTTSPacket_send(client, packet.header, buf, datalen);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 52, NULL, client->socket, client->addr, client->clientID, msgId, topicId, returnCode, rc);
@@ -953,7 +1032,7 @@ int MQTTSPacket_send_subAck(Clients* client, MQTTS_Subscribe* sub, int topicId, 
 	writeInt(&ptr, topicId);
 	writeInt(&ptr, sub->msgId);
 	writeChar(&ptr, returnCode);
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, datalen);
+	rc = MQTTSPacket_send(client, packet.header, buf, datalen);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 68, NULL, client->socket, client->addr, client->clientID, sub->msgId, topicId, returnCode, rc);
@@ -973,7 +1052,7 @@ int MQTTSPacket_send_unsubAck(Clients* client, int msgId)
 	packet.header.type = MQTTS_UNSUBACK;
 	ptr = buf = malloc(2);
 	writeInt(&ptr, msgId);
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, 2);
+	rc = MQTTSPacket_send(client, packet.header, buf, 2);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 72, NULL, client->socket, client->addr, client->clientID, msgId, rc);
@@ -1003,7 +1082,7 @@ int MQTTSPacket_send_publish(Clients* client, MQTTS_Publish* pub)
 		writeInt(&ptr, pub->topicId);
 	writeInt(&ptr, pub->msgId);
 	memcpy(ptr, pub->data, pub->dataLen);
-	rc = MQTTSPacket_send(client->socket, client->addr, pub->header, buf, datalen);
+	rc = MQTTSPacket_send(client, pub->header, buf, datalen);
 	free(buf);
 	Log(LOG_PROTOCOL, 54, NULL, client->socket, client->addr, client->clientID,
 			(pub->flags.QoS == 1 || pub->flags.QoS == 2) ? pub->msgId : 0,
@@ -1036,7 +1115,7 @@ int MQTTSPacket_send_puback(Clients* client, /*char* shortTopic, int topicId, */
 	writeInt(&ptr, msgId);
 	writeChar(&ptr, returnCode);
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, datalen);
+	rc = MQTTSPacket_send(client, packet.header, buf, datalen);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 56, NULL, socket, client->addr, client->clientID, msgId, rc);
@@ -1088,7 +1167,7 @@ int MQTTSPacket_send_register(Clients* client, int topicId, char* topicName, int
 	writeInt(&ptr, msgId);
 	memcpy(ptr, topicName, strlen(topicName));
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, datalen);
+	rc = MQTTSPacket_send(client, packet.header, buf, datalen);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 50, NULL, client->socket, client->addr, client->clientID, msgId, topicId, topicName, rc);
@@ -1105,7 +1184,7 @@ int MQTTSPacket_send_advertise(int sock, char* address, unsigned char gateway_id
 	FUNC_ENTRY;
 	buf = MQTTSPacketSerialize_advertise(gateway_id, duration);
 	
-	rc = MQTTSPacket_sendPacketBuffer(sock, address, buf);
+	rc = MQTTSPacket_sendPacketBufferSocket(sock, address, buf);
 	free(buf.data);
 
 	Log(LOG_PROTOCOL, 30, NULL, sock, "", address, gateway_id, duration, rc);
@@ -1125,7 +1204,7 @@ int MQTTSPacket_send_connect(Clients* client)
 	FUNC_ENTRY;
 	buf = MQTTSPacketSerialize_connect(client->cleansession, (client->will != NULL), 1, client->keepAliveInterval, client->clientID);
 	
-	rc = MQTTSPacket_sendPacketBuffer(client->socket, client->addr, buf);
+	rc = MQTTSPacket_sendPacketBuffer(client, buf);
 	free(buf.data);
 
 	Log(LOG_PROTOCOL, 38, NULL, client->socket, client->addr, client->clientID, client->cleansession, rc);
@@ -1154,7 +1233,7 @@ int MQTTSPacket_send_willTopic(Clients* client)
 	writeChar(&ptr, packet.flags.all);
 	memcpy(ptr, client->will->topic, len-1);
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, len);
+	rc = MQTTSPacket_send(client, packet.header, buf, len);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 44, NULL, client->socket, client->addr, client->clientID,
@@ -1180,7 +1259,7 @@ int MQTTSPacket_send_willMsg(Clients* client)
 
 	memcpy(ptr, client->will->msg, len);
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, len);
+	rc = MQTTSPacket_send(client, packet.header, buf, len);
 	free(buf);
 
 	Log(LOG_PROTOCOL, 48, NULL, client->socket, client->addr, client->clientID, client->will->msg, rc);
@@ -1234,7 +1313,7 @@ int MQTTSPacket_send_subscribe(Clients* client, char* topicName, int qos, int ms
 	writeInt(&ptr, msgId);
 	memcpy(ptr, topicName, strlen(topicName));
 
-	rc = MQTTSPacket_send(client->socket, client->addr, packet.header, buf, datalen);
+	rc = MQTTSPacket_send(client, packet.header, buf, datalen);
 	free(buf);
 
 	FUNC_EXIT_RC(rc);

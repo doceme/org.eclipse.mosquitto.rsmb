@@ -120,6 +120,9 @@ static BrokerStates BrokerState =
 	0L,			/**< start time of the broker for uptime calculation */
 #if defined(MQTTS)
 	65535,      /*<< max mqtts packet size */
+#if defined(MQTTS_FORWARDER)
+	{ NULL, 0 },
+#endif
 #endif
 };	/**< the global broker state structure */
 
@@ -334,6 +337,9 @@ int Broker_startup()
 #if defined(MQTTS)
 	BrokerState.mqtts_clients = TreeInitialize(clientAddrCompare);
 	TreeAddIndex(BrokerState.mqtts_clients, clientIDCompare);
+#if defined(MQTTS_FORWARDER)
+	TreeAddIndex(BrokerState.mqtts_clients, clientWirelessIdCompare);
+#endif
 	BrokerState.disconnected_mqtts_clients = TreeInitialize(clientIDCompare);
 #endif
 #if !defined(SINGLE_LISTENER)
